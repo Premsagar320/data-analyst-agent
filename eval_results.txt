@@ -1,0 +1,13 @@
+[PASS] retries=0 | How many orders are there in total?
+[PASS] retries=0 | Which region has the highest total revenue? Revenue is quantity times price.
+[PASS] retries=0 | What is the total revenue across all orders? Revenue is quantity times price.
+[PASS] retries=0 | Which product has the highest total revenue? Revenue is quantity times price.
+[PASS] retries=0 | What is the average quantity per order?
+[PASS] retries=0 | How many orders came from the East region?
+[PASS] retries=0 | What is the total revenue for the North region? Revenue is quantity times price.
+[llm] busy, retrying in 10s (attempt 1/6)
+[llm] busy, retrying in 20s (attempt 2/6)
+[PASS] retries=0 | What is the total revenue in March 2026? Revenue is quantity times price.
+[PASS] retries=0 | What is the highest price in the data?
+
+Score: 9/9

@@ -1,0 +1,6 @@
+[PASS] retries=0 | How many orders have quantity greater than 3?
+[PASS] retries=0 | Which region has the lowest total revenue? Revenue is quantity times price.
+[PASS] retries=0 | What is the average revenue per order in the South region? Revenue is quantity times price.
+[PASS] retries=0 | What is the total revenue from Phone orders in the North and South regions together? Revenue is quantity times price.
+
+Score: 4/4
