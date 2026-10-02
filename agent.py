@@ -1,12 +1,13 @@
-import os, re, subprocess, sys, tempfile
+import os, re, subprocess, sys, tempfile, time
 from typing import TypedDict
 
 import pandas as pd
 from langgraph.graph import StateGraph, START, END
 
-from llm import ask_llm
+from llm import ask_llm, MODEL
 from summary import summarize_df
 from runner import execute_node
+from logger import log_run
 
 MAX_RETRIES = 3
 
@@ -94,7 +95,27 @@ graph.add_conditional_edges("execute", route, {"fix": "fix", "explain": "explain
 graph.add_edge("fix", "execute")
 graph.add_edge("explain", END)
 
-app = graph.compile()
+_compiled_app = graph.compile()
+
+
+class _LoggedApp:
+    """Thin wrapper around the compiled LangGraph app that logs every run."""
+
+    def invoke(self, inputs, **kwargs):
+        t0 = time.perf_counter()
+        result = _compiled_app.invoke(inputs, **kwargs)
+        elapsed = time.perf_counter() - t0
+        log_run(
+            model=MODEL,
+            question=inputs.get("question", ""),
+            retries=result.get("retries", 0),
+            seconds=elapsed,
+            had_error=bool(result.get("error", "")),
+        )
+        return result
+
+
+app = _LoggedApp()
 
 
 if __name__ == "__main__":
