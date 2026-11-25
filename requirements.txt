@@ -1,0 +1,8 @@
+google-genai
+langchain-core
+langchain-google-genai
+langgraph
+langgraph-prebuilt
+pandas
+python-dotenv
+streamlit

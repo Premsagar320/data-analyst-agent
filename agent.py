@@ -2,9 +2,10 @@ import os, re, subprocess, sys, tempfile, time
 from typing import TypedDict
 
 import pandas as pd
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import StateGraph, START, END
 
-from llm import ask_llm, MODEL
+from llm import ask_llm, get_chat_llm, MODEL
 from summary import summarize_df
 from runner import execute_node
 from logger import log_run
@@ -31,6 +32,42 @@ def clean_code(text):
     return (match.group(1) if match else text).strip()
 
 
+# Tool name → callable map for the ReAct loop
+_TOOL_MAP = {t.name: t for t in ANALYST_TOOLS}
+
+
+def _run_tool_loop(llm_with_tools, messages: list, max_rounds: int = 5) -> str:
+    """Drive a bind_tools ReAct loop until the model stops calling tools.
+
+    The LLM can call get_dataframe_summary or get_sample_rows any number of
+    times. Each tool result is appended as a ToolMessage and fed back so the
+    model can refine its understanding before writing the final code.
+
+    Returns the text content of the last AIMessage (the final code).
+    """
+    for _ in range(max_rounds):
+        response = llm_with_tools.invoke(messages)
+        messages = messages + [response]
+
+        # No tool calls → model is done; return its text output
+        if not response.tool_calls:
+            return response.content or ""
+
+        # Execute every tool the model requested and collect results
+        for tc in response.tool_calls:
+            fn = _TOOL_MAP.get(tc["name"])
+            try:
+                result = fn.invoke(tc["args"]) if fn else f"Unknown tool: {tc['name']}"
+            except Exception as exc:
+                result = f"Tool error: {exc}"
+            messages = messages + [
+                ToolMessage(content=str(result), tool_call_id=tc["id"])
+            ]
+
+    # Safety: return whatever the model last said if rounds exhausted
+    return response.content or ""
+
+
 def inspect_node(state):
     df = pd.read_csv(state["csv_path"])
     # Point the LangChain tools at the current CSV for this run.
@@ -39,21 +76,21 @@ def inspect_node(state):
 
 
 def generate_node(state):
-    # Expose the tool signatures in the prompt so the LLM knows what it can call.
-    tool_descriptions = "\n".join(
-        f"- {t.name}: {t.description.splitlines()[0]}" for t in ANALYST_TOOLS
-    )
-    prompt = f"""Dataset info:
-{state['summary']}
-
-Question: {state['question']}
-
-You have access to the following tools:
-{tool_descriptions}
-
-Write pandas code that answers the question. A DataFrame named df is already loaded.
-Use print() to show the final result. Return only code."""
-    return {"code": clean_code(ask_llm(prompt))}
+    llm_with_tools = get_chat_llm().bind_tools(ANALYST_TOOLS)
+    messages = [
+        SystemMessage("You are a helpful data analyst. "
+                      "Use the available tools to explore the dataset before writing code."),
+        HumanMessage(
+            f"Dataset info:\n{state['summary']}\n\n"
+            f"Question: {state['question']}\n\n"
+            f"Use get_dataframe_summary or get_sample_rows if you need to inspect "
+            f"column names or values. Then write pandas code that answers the question. "
+            f"A DataFrame named df is already loaded. Use print() for the result. "
+            f"Return only the final code, no explanation."
+        ),
+    ]
+    raw = _run_tool_loop(llm_with_tools, messages)
+    return {"code": clean_code(raw)}
 
 
 def fix_node(state):
@@ -70,29 +107,24 @@ def fix_node(state):
             lines.append(f"Error:\n{entry['error']}\n")
         prior_failures = "\n".join(lines)
 
-    # Remind the LLM which tools it can use to inspect the data.
-    tool_descriptions = "\n".join(
-        f"- {t.name}: {t.description.splitlines()[0]}" for t in ANALYST_TOOLS
-    )
-
-    prompt = f"""Question: {state['question']}
-
-Dataset info:
-{state['summary']}
-
-You have access to the following tools to inspect the data before writing code:
-{tool_descriptions}
-
-{prior_failures}
-Your latest code:
-{state['code']}
-
-It failed with this error:
-{state['error']}
-
-Fix the code. A DataFrame named df is already loaded. Return only code."""
+    llm_with_tools = get_chat_llm().bind_tools(ANALYST_TOOLS)
+    messages = [
+        SystemMessage("You are a helpful data analyst. "
+                      "Use the available tools to inspect the dataset before fixing code."),
+        HumanMessage(
+            f"Question: {state['question']}\n\n"
+            f"Dataset info:\n{state['summary']}\n\n"
+            f"{prior_failures}\n"
+            f"Your latest code:\n{state['code']}\n\n"
+            f"It failed with this error:\n{state['error']}\n\n"
+            f"Use get_dataframe_summary or get_sample_rows if you need to verify column "
+            f"names or values. Then fix the code. A DataFrame named df is already loaded. "
+            f"Return only the corrected code, no explanation."
+        ),
+    ]
+    raw = _run_tool_loop(llm_with_tools, messages)
     return {
-        "code": clean_code(ask_llm(prompt)),
+        "code": clean_code(raw),
         "retries": state["retries"] + 1,
         "history": updated_history,
     }
