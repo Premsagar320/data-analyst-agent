@@ -8,6 +8,7 @@ from llm import ask_llm, MODEL
 from summary import summarize_df
 from runner import execute_node
 from logger import log_run
+from tools import ANALYST_TOOLS, set_context
 
 MAX_RETRIES = 3
 
@@ -32,14 +33,23 @@ def clean_code(text):
 
 def inspect_node(state):
     df = pd.read_csv(state["csv_path"])
+    # Point the LangChain tools at the current CSV for this run.
+    set_context(state["csv_path"])
     return {"summary": summarize_df(df), "retries": 0, "error": "", "output": "", "history": []}
 
 
 def generate_node(state):
+    # Expose the tool signatures in the prompt so the LLM knows what it can call.
+    tool_descriptions = "\n".join(
+        f"- {t.name}: {t.description.splitlines()[0]}" for t in ANALYST_TOOLS
+    )
     prompt = f"""Dataset info:
 {state['summary']}
 
 Question: {state['question']}
+
+You have access to the following tools:
+{tool_descriptions}
 
 Write pandas code that answers the question. A DataFrame named df is already loaded.
 Use print() to show the final result. Return only code."""
@@ -60,10 +70,18 @@ def fix_node(state):
             lines.append(f"Error:\n{entry['error']}\n")
         prior_failures = "\n".join(lines)
 
+    # Remind the LLM which tools it can use to inspect the data.
+    tool_descriptions = "\n".join(
+        f"- {t.name}: {t.description.splitlines()[0]}" for t in ANALYST_TOOLS
+    )
+
     prompt = f"""Question: {state['question']}
 
 Dataset info:
 {state['summary']}
+
+You have access to the following tools to inspect the data before writing code:
+{tool_descriptions}
 
 {prior_failures}
 Your latest code:
